@@ -29,6 +29,7 @@ export type Turn = {
   tools: number
   tokens: number
   usd: number
+  activity: string
   isWorking: boolean
 }
 

@@ -211,6 +211,20 @@ async function nameTheRun($: EngineInterface) {
   if (name) await update($, turn, v => (v ? { ...v, title: name } : v))
 }
 
+// What the main thread is doing now, for the band's pill when there is no task list.
+function activityOf(tool: string): string {
+  if (/^(Read|NotebookRead)/.test(tool)) return 'Reading'
+  if (/^(Edit|MultiEdit|NotebookEdit)$/.test(tool)) return 'Editing'
+  if (tool === 'Write') return 'Writing'
+  if (/^(Bash|PowerShell|Monitor)$/.test(tool)) return 'Running'
+  if (/^(Glob|Grep|ToolSearch|LSP)$/.test(tool)) return 'Searching'
+  if (/^Web/.test(tool)) return 'Browsing'
+  if (/^(Agent|Task|Workflow)$/.test(tool)) return 'Delegating'
+  if (/^(TodoWrite|Task[A-Z])/.test(tool)) return 'Planning'
+  if (/^mcp__/.test(tool)) return 'Connecting'
+  return 'Working'
+}
+
 async function openPane($: EngineInterface) {
   await $.ui.open({ id: PANE, title: 'Agents', columns: 46 })
 }
@@ -257,12 +271,12 @@ export const register: Register = on => {
     const now = await $.clock.now()
     const prompt = e.text.replace(/^\/\S+\s*/, '')
     const title = prompt.split(/[.\n:!?,]/)[0]!.trim().split(/\s+/).slice(0, 4).join(' ') || 'Working'
-    await update($, turn, () => ({ title, prompt, isTitled: false, startedAt: now, endedAt: null, steps: 0, tools: 0, tokens: 0, usd: 0, isWorking: true }))
+    await update($, turn, () => ({ title, prompt, isTitled: false, startedAt: now, endedAt: null, steps: 0, tools: 0, tokens: 0, usd: 0, activity: 'Thinking', isWorking: true }))
     await update($, todos, list => (list.length > 0 && list.every(t => t.status === 'completed') ? [] : list))
     await update($, agents, list => list.filter(a => a.status === 'running'))
     await update($, isBandHidden, () => false)
     ticker?.cancel()
-    ticker = $.clock.every(500, () => $.ui.invalidate('ui.render'))
+    ticker = $.clock.every(250, () => $.ui.invalidate('ui.render'))
     return next(e)
   })
 
@@ -330,7 +344,7 @@ export const register: Register = on => {
   })
 
   on('tool.call', async ($, e, next) => {
-    if (!e.agentId) await update($, turn, t => (t ? { ...t, tools: t.tools + 1 } : t))
+    if (!e.agentId) await update($, turn, t => (t ? { ...t, tools: t.tools + 1, activity: activityOf(e.tool) } : t))
     const ran = await next(e)
     if (ran.deny !== undefined || ran.isError) return ran
     const input = e as unknown as Record<string, unknown>
@@ -377,12 +391,15 @@ export const register: Register = on => {
     const custom = await read($, mascots)
     const now = await $.clock.now()
 
-    const fraction = overall(plan, subs)
+    // With no task list and no agents there is nothing to measure: sweep instead.
+    const isMeasured = plan.length > 0 || subs.length > 0
+    const sweep = 1 - Math.abs(((now / 2500) % 2) - 1)
+    const fraction = isMeasured ? overall(plan, subs) : sweep
     const done = plan.filter(x => x.status === 'completed').length
     const current = plan.find(x => x.status === 'in_progress') ?? plan.find(x => x.status === 'pending')
-    const word = (current?.content ?? running[0]?.label ?? 'Working').split(/\s+/)[0]!.replace(/[^\p{L}\p{N}-]/gu, '')
+    const word = (current?.content ?? running[0]?.label ?? t?.activity ?? 'Working').split(/\s+/)[0]!.replace(/[^\p{L}\p{N}-]/gu, '')
     const label = plan.length > 0 ? `${word} ${Math.min(done + 1, plan.length)}/${plan.length}` : word
-    const pct = `${Math.round(fraction * 100)}%`
+    const pct = isMeasured ? `${Math.round(fraction * 100)}%` : fmtTime(now - (t?.startedAt ?? now))
     const crab = lookFor(running[0]?.label ?? '', custom)
 
     const track = Svg ? (
@@ -390,7 +407,7 @@ export const register: Register = on => {
     ) : (
       (() => {
         const width = Math.max(10, Math.min(28, e.props.bodyColumns - 40))
-        const pos = plan.length > 0 ? Math.round(fraction * width) : Math.floor(now / 150) % width
+        const pos = Math.round(fraction * width)
         return (
           <Box flexDirection="row">
             <Text color="#55556E">{'·'.repeat(Math.max(0, pos))}</Text>

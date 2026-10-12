@@ -44,3 +44,19 @@ test('band shows title, task pill, percent and agent count; panel splits running
     await pane.unmount()
   }
 })
+
+test('with no task list or agents the band sweeps, names the activity and shows elapsed time', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+  on('tool.call', { tool: 'Read' }, () => ({ result: {} as never }))
+  await $.turn.start({ text: 'fix the typo', turnId: 't2' })
+  await $.tool.call({ tool: 'Read', file_path: 'a.md' } as never)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const band = await $.ui.mount({ plugin: 'savvy-progress', surface, component: 'AbovePrompt', props: BAND_PROPS })
+    expect(await band.find({ type: 'Text', text: /0%/ })).toBeUndefined()
+    expect(await band.find({ type: 'Text', text: /0:0\d/ })).toBeDefined()
+    await band.unmount()
+  }
+  void clock
+})
