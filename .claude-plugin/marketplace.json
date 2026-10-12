@@ -1,0 +1,15 @@
+{
+  "name": "isaac-mods",
+  "owner": { "name": "Isaac" },
+  "description": "Eight Claude Code mods: progress and subagent panel, tool skins, a second reader, file tree, cache cost guard, destructive-command guard, feedback-to-rules, and a text browser.",
+  "plugins": [
+    { "name": "savvy-progress", "source": "./plugins/savvy-progress", "description": "Progress bar above the prompt plus an Agents side panel with a pixel crab, model, effort, tokens and cost per subagent." },
+    { "name": "tool-skins", "source": "./plugins/tool-skins", "description": "Per-tool icons and theme colors for tool calls; seven themes, switch with /skin." },
+    { "name": "you-should-know", "source": "./plugins/you-should-know", "description": "A side agent flags what you should not miss in long replies." },
+    { "name": "file-tree", "source": "./plugins/file-tree", "description": "A file panel showing what Claude reads, edits and commits." },
+    { "name": "cache-tax", "source": "./plugins/cache-tax", "description": "Warns before a prompt reloads a cold prompt cache; /keepwarm keeps it warm." },
+    { "name": "blast-radius", "source": "./plugins/blast-radius", "description": "Stops destructive shell commands and lists the files they would remove until you proceed." },
+    { "name": "reflect", "source": "./plugins/reflect", "description": "Offers to save your corrections as rules in CLAUDE.md." },
+    { "name": "terminal-browser", "source": "./plugins/terminal-browser", "description": "A text-mode browser pane: /browse a URL, PR or local file." }
+  ]
+}

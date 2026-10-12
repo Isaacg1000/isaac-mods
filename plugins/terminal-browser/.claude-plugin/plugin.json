@@ -1,0 +1,7 @@
+{
+  "name": "terminal-browser",
+  "version": "0.1.0",
+  "author": { "name": "Isaac" },
+  "description": "A text-mode web browser in a pane beside the chat: /browse a URL or PR, follow links, and let Claude open pages for review.",
+  "types": "./types/index.d.ts"
+}

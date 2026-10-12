@@ -1,0 +1,7 @@
+{
+  "name": "reflect",
+  "version": "0.1.0",
+  "author": { "name": "Isaac" },
+  "description": "Spots corrections in your prompts and offers to save them as permanent rules in CLAUDE.md.",
+  "types": "./types/index.d.ts"
+}

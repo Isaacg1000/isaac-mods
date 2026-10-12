@@ -1,0 +1,7 @@
+{
+  "name": "tool-skins",
+  "version": "0.1.0",
+  "author": { "name": "Isaac" },
+  "description": "Reskins tool calls with per-tool icons and theme colors; seven themes, switch with /skin.",
+  "types": "./types/index.d.ts"
+}

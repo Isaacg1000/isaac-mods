@@ -1,0 +1,7 @@
+{
+  "name": "blast-radius",
+  "version": "0.1.0",
+  "author": { "name": "Isaac" },
+  "description": "Stops destructive shell commands, lists exactly which files would be lost, and waits for you to Proceed or Cancel.",
+  "types": "./types/index.d.ts"
+}

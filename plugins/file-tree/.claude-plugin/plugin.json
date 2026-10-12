@@ -1,0 +1,7 @@
+{
+  "name": "file-tree",
+  "version": "0.1.0",
+  "author": { "name": "Isaac" },
+  "description": "A file panel that shimmers on files Claude is reading or editing and turns them green once committed.",
+  "types": "./types/index.d.ts"
+}

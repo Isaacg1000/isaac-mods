@@ -1,0 +1,7 @@
+{
+  "name": "you-should-know",
+  "version": "0.1.0",
+  "author": { "name": "Isaac" },
+  "description": "A side agent reads each long reply and surfaces what you should not miss (costs, risks, actions needed).",
+  "types": "./types/index.d.ts"
+}
