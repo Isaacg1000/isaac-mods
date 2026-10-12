@@ -21,6 +21,8 @@ export type SubAgent = {
 
 export type Turn = {
   title: string
+  prompt: string
+  isTitled: boolean
   startedAt: number
   endedAt: number | null
   steps: number
@@ -40,6 +42,8 @@ declare module 'claude-code' {
       turn: Turn | null
       mascots: Record<string, Mascot>
       isCollapsed: boolean
+      isFinishedOpen: boolean
+      isBandHidden: boolean
     }
   }
 }

@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { ModelUsage, Register } from 'claude-code'
+import type { EngineInterface, ModelUsage, Register } from 'claude-code'
 
 import type { Mascot, SubAgent, Todo, Turn } from '../types'
 
@@ -9,6 +9,21 @@ const agents = atom({ plugin: 'savvy-progress', key: 'agents' } as const, [] as 
 const turn = atom({ plugin: 'savvy-progress', key: 'turn' } as const, null as Turn | null)
 const mascots = atom({ plugin: 'savvy-progress', key: 'mascots' } as const, {} as Record<string, Mascot>)
 const isCollapsed = atom({ plugin: 'savvy-progress', key: 'isCollapsed' } as const, false)
+const isFinishedOpen = atom({ plugin: 'savvy-progress', key: 'isFinishedOpen' } as const, true)
+const isBandHidden = atom({ plugin: 'savvy-progress', key: 'isBandHidden' } as const, false)
+
+// Colors picked to read on both the desktop app's dark theme and a terminal.
+const C = {
+  coral: '#E07A5F',
+  green: '#3FB68B',
+  blue: '#4A8FE7',
+  amber: '#E8A33D',
+  red: '#E0604F',
+  magenta: '#C0508F',
+  violet: '#8B7CF6',
+  track: '#3A3A3A',
+  crab: '#D97757',
+}
 
 // USD per million tokens, API list prices. An estimate: subscriptions are not billed per token.
 const PRICES: Array<[RegExp, number, number]> = [
@@ -38,73 +53,102 @@ function prettyModel(model: string): string {
   return m[3] ? `${name} ${m[2]}.${m[3]}` : `${name} ${m[2]}`
 }
 
+// Effort level -> the word and color the panel shows.
 const EFFORT: Record<string, [string, string]> = {
-  low: ['light', 'success'],
-  medium: ['medium', 'suggestion'],
-  high: ['careful', 'warning'],
-  xhigh: ['thorough', 'magenta'],
-  max: ['max', 'error'],
+  low: ['light', C.green],
+  medium: ['medium', C.blue],
+  high: ['careful', C.amber],
+  xhigh: ['heavy', C.red],
+  max: ['max', C.magenta],
 }
-const effortLook = (effort: string): [string, string] => EFFORT[effort] ?? (effort ? [effort, 'subtle'] : ['', 'subtle'])
+const effortLook = (effort: string): [string, string] => EFFORT[effort] ?? ['', C.blue]
 
-// Pixel crab, 10x8. b body, e eye, h hat.
-const CRAB = ['..........', '..........', '.b.bbbb.b.', '.bbbbbbbb.', 'bbebbbbebb', '.bbbbbbbb.', '..bbbbbb..', '.b.b..b.b.']
-const HAT_PIXELS: Record<string, [string, string]> = {
-  beret: ['...hhhh...', '..hhhhhh..'],
-  hardhat: ['...hhhh...', '.hhhhhhhh.'],
-  crown: ['...h.h.h..', '...hhhhh..'],
-  headphones: ['..hhhhhh..', '.h......h.'],
-  wizard: ['....hh....', '...hhhh...'],
-  cap: ['..hhhh....', '..hhhhhhh.'],
-  none: ['..........', '..........'],
-}
-const HAT_TEXT: Record<string, string> = {
-  beret: '  ▄▆▄  ',
-  hardhat: ' ▄███▄ ',
-  crown: ' ▚▞▚▞▚ ',
-  headphones: ' ╭───╮ ',
-  wizard: '   ▲   ',
-  cap: ' ▄▄▄▖  ',
-  none: '       ',
+// Pixel crab, 12x9. b body, d shade, e eye, h hat, a accessory.
+const CRAB = [
+  '............',
+  '............',
+  '............',
+  '..b.bbbbb.b.',
+  '..bbbbbbbbb.',
+  '.bbebbbbebbb',
+  '.bbbbbbbbbbb',
+  '..dbbbbbbbd.',
+  '..b.b...b.b.',
+]
+const HATS: Record<string, string[]> = {
+  beret: ['....hhhh....', '...hhhhhh...', '..hhhhhhhh..'],
+  hardhat: ['............', '....hhhh....', '..hhhhhhhh..'],
+  cap: ['............', '...hhhhh....', '...hhhhhhhh.'],
+  crown: ['............', '...h.h.h.h..', '...hhhhhhh..'],
+  headphones: ['............', '...hhhhhhh..', '..h.......h.'],
+  wizard: ['.....h......', '....hhh.....', '...hhhhh....'],
+  antenna: ['.........a..', '.........h..', '.........h..'],
+  none: ['............', '............', '............'],
 }
 
 type Look = { color: string; hatColor: string; hat: string }
 
 // Built-in looks, matched against the subagent's type and description.
 const ROLES: Array<[RegExp, Look]> = [
-  [/design|graphic|ui\b|ux|css|style|visual/i, { color: '#c06a8f', hatColor: '#5b4a8a', hat: 'beret' }],
-  [/review|test|qa|verify|check|audit/i, { color: '#c98a3a', hatColor: '#e6c84a', hat: 'hardhat' }],
-  [/explore|research|search|find|investigat/i, { color: '#b5763f', hatColor: '#3f8f5a', hat: 'cap' }],
-  [/plan|architect|strategy/i, { color: '#5f8fb5', hatColor: '#7a5cc7', hat: 'wizard' }],
-  [/code|dev|implement|build|fix|page|general/i, { color: '#D97757', hatColor: '#2f9e6a', hat: 'cap' }],
+  [/design|graphic|\bui\b|ux|css|style|visual|brand/i, { color: C.crab, hatColor: '#5B4A8A', hat: 'beret' }],
+  [/review|test|qa|verify|check|audit/i, { color: C.crab, hatColor: '#E6C84A', hat: 'hardhat' }],
+  [/explore|research|search|find|investigat|competitor/i, { color: C.crab, hatColor: '#E6C84A', hat: 'crown' }],
+  [/plan|architect|strategy/i, { color: C.crab, hatColor: C.violet, hat: 'wizard' }],
+  [/code|dev|implement|build|fix|page|engineer/i, { color: C.crab, hatColor: '#9AA0A6', hat: 'headphones' }],
 ]
-const DEFAULT_LOOK: Look = { color: '#D97757', hatColor: '#D97757', hat: 'none' }
+const DEFAULT_LOOK: Look = { color: C.crab, hatColor: '#4FB3C9', hat: 'antenna' }
 
 const NAMED: Record<string, string> = {
-  red: '#d9534f', orange: '#e8893a', yellow: '#e6c84a', green: '#3f8f5a', teal: '#2aa198', cyan: '#4fb3c9',
-  blue: '#4a7fd1', purple: '#7a5cc7', magenta: '#c0508f', pink: '#e27aa8', brown: '#8a5a3a', gray: '#888888', white: '#eeeeee', black: '#222222',
+  red: '#D9534F', orange: '#E8893A', yellow: '#E6C84A', green: '#3F8F5A', teal: '#2AA198', cyan: '#4FB3C9',
+  blue: '#4A7FD1', purple: '#7A5CC7', magenta: '#C0508F', pink: '#E27AA8', brown: '#8A5A3A', gray: '#888888', white: '#EEEEEE', black: '#222222',
 }
 const hex = (c: string) => NAMED[c.toLowerCase()] ?? c
 
-function lookFor(agent: SubAgent, custom: Record<string, Mascot>): Look {
-  const text = `${agent.kind} ${agent.label}`.toLowerCase()
-  const mine = Object.entries(custom).find(([word]) => text.includes(word.toLowerCase()))?.[1]
-  const role = ROLES.find(([re]) => re.test(text))?.[1] ?? DEFAULT_LOOK
-  return mine ? { color: role.color, hatColor: hex(mine.color), hat: mine.hat in HAT_PIXELS ? mine.hat : role.hat } : role
+function lookFor(text: string, custom: Record<string, Mascot>): Look {
+  const t = text.toLowerCase()
+  const mine = Object.entries(custom).find(([word]) => t.includes(word.toLowerCase()))?.[1]
+  const role = ROLES.find(([re]) => re.test(t))?.[1] ?? DEFAULT_LOOK
+  return mine ? { color: role.color, hatColor: hex(mine.color), hat: mine.hat in HATS ? mine.hat : role.hat } : role
 }
 
-function crabSvg(look: Look, isDim: boolean): string {
-  const [h0, h1] = HAT_PIXELS[look.hat] ?? HAT_PIXELS.none!
-  const rows = [h0, h1, ...CRAB.slice(2)]
-  const colors: Record<string, string> = { b: look.color, e: '#1a1a1a', h: look.hatColor }
+function crabSvg(look: Look, isDim = false): string {
+  const hat = HATS[look.hat] ?? HATS.none!
+  const rows = [...hat, ...CRAB.slice(3)]
+  const fill: Record<string, string> = { b: look.color, d: '#B85F43', e: '#1A1A1A', h: look.hatColor, a: '#F2F2F2' }
   let rects = ''
   rows.forEach((row, y) =>
     [...row].forEach((ch, x) => {
-      const fill = colors[ch]
-      if (fill) rects += `<rect x="${x}" y="${y}" width="1" height="1" fill="${fill}"/>`
+      const f = fill[ch]
+      if (f) rects += `<rect x="${x}" y="${y}" width="1.02" height="1.02" fill="${f}"/>`
     }),
   )
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 8" shape-rendering="crispEdges" opacity="${isDim ? 0.55 : 1}">${rects}</svg>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 9" shape-rendering="crispEdges"${isDim ? ' opacity="0.7"' : ''}>${rects}</svg>`
+}
+
+// A thin progress line, as SVG for the desktop app.
+function barSvg(fraction: number, color: string): string {
+  const w = Math.round(Math.max(0, Math.min(1, fraction)) * 1000)
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 6" preserveAspectRatio="none"><rect width="1000" height="6" rx="3" fill="${C.track}"/><rect width="${w}" height="6" rx="3" fill="${color}"/></svg>`
+}
+
+// The band's track: dotted rail with a pill naming the current task.
+function pillSvg(fraction: number, label: string): string {
+  const W = 240
+  const H = 22
+  const pillW = Math.min(150, Math.max(70, label.length * 7.2 + 24))
+  const x = Math.round(Math.max(0, Math.min(W - pillW, fraction * W - pillW / 2)))
+  let dots = ''
+  for (let i = 6; i < W; i += 7) {
+    const y = 8 + ((i * 7) % 7)
+    dots += `<circle cx="${i}" cy="${y}" r="1" fill="#6B6B8A"/><circle cx="${i + 3}" cy="${y + 5}" r="0.8" fill="#55556E"/>`
+  }
+  const safe = label.replace(/[<>&"]/g, '')
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}">` +
+    `<rect width="${W}" height="${H}" rx="11" fill="#26263A"/>${dots}` +
+    `<rect x="${x}" y="1" width="${pillW}" height="${H - 2}" rx="10" fill="${C.violet}"/>` +
+    `<text x="${x + pillW / 2}" y="15" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="600" fill="#FFFFFF">${safe}</text></svg>`
+  )
 }
 
 const fmtTokens = (n: number) => (n >= 1_000_000 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`)
@@ -112,14 +156,14 @@ const fmtTime = (ms: number) => {
   const s = Math.max(0, Math.round(ms / 1000))
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
-const bar = (fraction: number, width: number) => {
+const textBar = (fraction: number, width: number) => {
   const filled = Math.round(Math.max(0, Math.min(1, fraction)) * width)
   return ['━'.repeat(filled), '━'.repeat(width - filled)] as const
 }
 
 function todosFrom(tool: string, input: Record<string, unknown>, result: unknown, list: Todo[], fallbackId: string): Todo[] | undefined {
   if (tool === 'TodoWrite') {
-    const items = (input.todos as Array<{ content: string; activeForm?: string; status: Todo['status'] }>) ?? []
+    const items = (input.todos as Array<{ content: string; status: Todo['status'] }>) ?? []
     return items.map((t, i) => ({ id: `todo-${i}`, content: t.content, status: t.status }))
   }
   if (tool === 'TaskCreate') {
@@ -144,6 +188,33 @@ function progressOf(a: SubAgent): number {
   return Math.min(0.9, a.steps / 25)
 }
 
+// Overall progress: the main task list, else the agents' average.
+function overall(plan: Todo[], subs: SubAgent[]): number {
+  if (plan.length > 0) return plan.filter(t => t.status === 'completed').length / plan.length
+  if (subs.length > 0) return subs.reduce((s, a) => s + progressOf(a), 0) / subs.length
+  return 0
+}
+
+// One short name for the run ("Launch kit"), from Haiku; the prompt's opening words until then.
+async function nameTheRun($: EngineInterface) {
+  const t = await read($, turn)
+  if (!t || t.isTitled) return
+  await update($, turn, v => (v ? { ...v, isTitled: true } : v))
+  const reply = await $.model.complete({
+    model: 'haiku',
+    system: 'Name the task in 2 or 3 words, Sentence case, no punctuation or quotes. Reply with the name only.',
+    prompt: t.prompt.slice(0, 2000),
+    maxTokens: 20,
+    timeoutMs: 15000,
+  })
+  const name = reply.isAnswered ? reply.text.trim().split('\n')[0]!.replace(/["'.]/g, '').slice(0, 32) : ''
+  if (name) await update($, turn, v => (v ? { ...v, title: name } : v))
+}
+
+async function openPane($: EngineInterface) {
+  await $.ui.open({ id: PANE, title: 'Agents', columns: 46 })
+}
+
 let ticker: { cancel: () => void } | undefined
 
 export const register: Register = on => {
@@ -152,7 +223,7 @@ export const register: Register = on => {
     await $.command.register({
       name: 'crab-style',
       description: 'Customize agent crabs: /crab-style <keyword> <hat color> <hat>',
-      argumentHint: '<keyword> <color> <beret|hardhat|crown|headphones|wizard|cap|none>',
+      argumentHint: `<keyword> <color> <${Object.keys(HATS).join('|')}>`,
     })
     const saved = (await $.store.get('mascots')) as Record<string, Mascot> | undefined
     if (saved) await update($, mascots, () => saved)
@@ -165,7 +236,7 @@ export const register: Register = on => {
       await $.ui.close({ id: PANE })
       return { text: 'Agents panel closed.' }
     }
-    await $.ui.open({ id: PANE, title: 'Agents', columns: 48 })
+    await openPane($)
     return { text: 'Agents panel opened.' }
   })
 
@@ -174,9 +245,9 @@ export const register: Register = on => {
     if (!word || !color) {
       const current = await read($, mascots)
       const list = Object.entries(current).map(([k, m]) => `${k}: ${m.color} ${m.hat}`).join(', ') || 'none'
-      return { text: `Usage: /crab-style <keyword> <color> <hat>. Hats: ${Object.keys(HAT_PIXELS).join(', ')}. Custom styles: ${list}` }
+      return { text: `Usage: /crab-style <keyword> <color> <hat>. Hats: ${Object.keys(HATS).join(', ')}. Custom styles: ${list}` }
     }
-    if (!(hat in HAT_PIXELS)) return { text: `Unknown hat "${hat}". Pick one of: ${Object.keys(HAT_PIXELS).join(', ')}` }
+    if (!(hat in HATS)) return { text: `Unknown hat "${hat}". Pick one of: ${Object.keys(HATS).join(', ')}` }
     const next = await update($, mascots, m => ({ ...m, [word]: { color, hat } }))
     await $.store.set('mascots', next)
     return { text: `Agents matching "${word}" now wear a ${color} ${hat}.` }
@@ -184,10 +255,12 @@ export const register: Register = on => {
 
   on('turn.start', async ($, e, next) => {
     const now = await $.clock.now()
-    const title = e.text.replace(/^\/\S+\s*/, '').split(/[.\n:!?]/)[0]!.trim().slice(0, 40) || 'Agents'
-    await update($, turn, () => ({ title, startedAt: now, endedAt: null, steps: 0, tools: 0, tokens: 0, usd: 0, isWorking: true }))
+    const prompt = e.text.replace(/^\/\S+\s*/, '')
+    const title = prompt.split(/[.\n:!?,]/)[0]!.trim().split(/\s+/).slice(0, 4).join(' ') || 'Working'
+    await update($, turn, () => ({ title, prompt, isTitled: false, startedAt: now, endedAt: null, steps: 0, tools: 0, tokens: 0, usd: 0, isWorking: true }))
     await update($, todos, list => (list.length > 0 && list.every(t => t.status === 'completed') ? [] : list))
     await update($, agents, list => list.filter(a => a.status === 'running'))
+    await update($, isBandHidden, () => false)
     ticker?.cancel()
     ticker = $.clock.every(500, () => $.ui.invalidate('ui.render'))
     return next(e)
@@ -250,9 +323,8 @@ export const register: Register = on => {
         endedAt: null,
       }
       await update($, agents, list => [...list.filter(a => a.id !== agent.id), agent].slice(-40))
-      if ((await read($, agents)).filter(a => a.status === 'running').length >= 2) {
-        void $.ui.open({ id: PANE, title: 'Agents', columns: 48 })
-      }
+      $.clock.after(0, () => void nameTheRun($))
+      if ((await read($, agents)).filter(a => a.status === 'running').length >= 2) void openPane($)
     }
     return result
   })
@@ -290,55 +362,65 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // The band above the prompt: ● title  [track with the current task]  75%  crab ×4  ✕
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const t = await read($, turn)
-    const list = await read($, todos)
+    const plan = await read($, todos)
     const subs = await read($, agents)
     const running = subs.filter(a => a.status === 'running')
-    if (e.props.hasSurvey || ((!t || !t.isWorking) && running.length === 0)) return next(e)
+    const isActive = (t?.isWorking ?? false) || running.length > 0
+    if (e.props.hasSurvey || !isActive || (await read($, isBandHidden))) return next(e)
 
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const els = $.ui.resolve(e)
+    const { Box, Text, Button } = els
+    const Svg = 'Svg' in els ? els.Svg : undefined
+    const custom = await read($, mascots)
     const now = await $.clock.now()
-    const width = Math.max(10, Math.min(32, e.props.bodyColumns - 52))
-    const done = list.filter(x => x.status === 'completed').length
-    const active = list.find(x => x.status === 'in_progress')
 
-    if (list.length === 0) {
-      // No task list: an indeterminate sweep.
-      const pos = Math.floor(now / 120) % (width * 2)
-      const head = pos < width ? pos : width * 2 - pos - 1
-      const cells = Array.from({ length: width }, (_, i) => Math.abs(i - head) <= 1)
-      return (
-        <Box flexDirection="row" gap={1}>
-          <Text color="claude">savvy-progress</Text>
+    const fraction = overall(plan, subs)
+    const done = plan.filter(x => x.status === 'completed').length
+    const current = plan.find(x => x.status === 'in_progress') ?? plan.find(x => x.status === 'pending')
+    const word = (current?.content ?? running[0]?.label ?? 'Working').split(/\s+/)[0]!.replace(/[^\p{L}\p{N}-]/gu, '')
+    const label = plan.length > 0 ? `${word} ${Math.min(done + 1, plan.length)}/${plan.length}` : word
+    const pct = `${Math.round(fraction * 100)}%`
+    const crab = lookFor(running[0]?.label ?? '', custom)
+
+    const track = Svg ? (
+      <Svg source={pillSvg(fraction, label)} alt={`${label}, ${pct}`} width={240} height={22} />
+    ) : (
+      (() => {
+        const width = Math.max(10, Math.min(28, e.props.bodyColumns - 40))
+        const pos = plan.length > 0 ? Math.round(fraction * width) : Math.floor(now / 150) % width
+        return (
           <Box flexDirection="row">
-            {cells.map(lit => (
-              <Text color={lit ? 'claude' : 'subtle'}>━</Text>
-            ))}
+            <Text color="#55556E">{'·'.repeat(Math.max(0, pos))}</Text>
+            <Text backgroundColor={C.violet} color="#FFFFFF" bold>
+              {' '}
+              {label}{' '}
+            </Text>
+            <Text color="#55556E">{'·'.repeat(Math.max(0, width - pos))}</Text>
           </Box>
-          <Text dimColor>
-            {t ? `${t.steps} steps · ${fmtTime(now - t.startedAt)}` : ''}
-            {running.length > 0 ? ` · ${running.length} agents` : ''}
-          </Text>
-          {subs.length > 0 && <Button key="open-agents" label="Agents" plain onPress={() => void $.ui.open({ id: PANE, title: 'Agents', columns: 48 })} />}
-        </Box>
-      )
-    }
-    const [filled, empty] = bar(done / list.length, width)
-    const subUsd = subs.reduce((s, a) => s + a.usd, 0)
+        )
+      })()
+    )
+
     return (
-      <Box flexDirection="row" gap={1}>
-        <Text color="claude">savvy-progress</Text>
-        <Box flexDirection="row">
-          <Text color="success">{filled}</Text>
-          <Text color="subtle">{empty}</Text>
+      <Box flexDirection="row" alignItems="center" gap={2}>
+        <Box flexDirection="row" gap={1}>
+          <Text color={C.violet}>●</Text>
+          <Text bold wrap="truncate-end">
+            {t?.title ?? 'Working'}
+          </Text>
         </Box>
-        <Text wrap="truncate-end">
-          Tasks {done}/{list.length}
-          {active ? ` · ${active.content}` : ''}
-        </Text>
-        {t && <Text dimColor>· ≈${(t.usd + subUsd).toFixed(2)}</Text>}
-        {subs.length > 0 && <Button key="open-agents" label="Agents" plain onPress={() => void $.ui.open({ id: PANE, title: 'Agents', columns: 48 })} />}
+        {track}
+        <Text dimColor>{pct}</Text>
+        {subs.length > 0 && (
+          <Box flexDirection="row" alignItems="center" gap={1}>
+            {Svg ? <Svg source={crabSvg(crab)} alt="agents" width={24} height={18} /> : <Text color={C.crab}>▟█▙</Text>}
+            <Button key="open-agents" label={`×${subs.length}`} plain onPress={() => void openPane($)} />
+          </Box>
+        )}
+        <Button key="hide-band" label="✕" plain role="dismiss" onPress={() => update($, isBandHidden, () => true)} />
       </Box>
     )
   })
@@ -346,112 +428,124 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const els = $.ui.resolve(e)
     const { Box, Text, Button } = els
-    const Svg = e.surface === 'desktop' || e.surface === 'mobile' ? (els as { Svg?: typeof els.Box }).Svg : undefined
+    const Svg = 'Svg' in els ? els.Svg : undefined
     const subs = await read($, agents)
     const plan = await read($, todos)
     const t = await read($, turn)
     const custom = await read($, mascots)
     const collapsed = await read($, isCollapsed)
+    const finishedOpen = await read($, isFinishedOpen)
     const now = await $.clock.now()
-    const frame = Math.floor(now / 400) % 2
     const cols = Math.max(24, e.props.bodyColumns)
-    const barWidth = Math.max(10, cols - 4)
 
     const totalUsd = subs.reduce((s, a) => s + a.usd, 0) + (t?.usd ?? 0)
     const totalTokens = subs.reduce((s, a) => s + a.input + a.output + a.cacheRead + a.cacheWrite, 0) + (t?.tokens ?? 0)
     const elapsed = t ? (t.endedAt ?? now) - t.startedAt : 0
 
-    // Planned: the main task list's pending items no agent has taken yet.
-    const taken = (content: string) => subs.some(a => a.label.toLowerCase().includes(content.toLowerCase()) || content.toLowerCase().includes(a.label.toLowerCase()))
+    const running = subs.filter(a => a.status === 'running').reverse()
+    const finished = subs.filter(a => a.status !== 'running').reverse()
+    const taken = (content: string) =>
+      subs.some(a => a.label.toLowerCase().includes(content.toLowerCase()) || content.toLowerCase().includes(a.label.toLowerCase()))
     const planned = plan.filter(p => p.status === 'pending' && !taken(p.content))
 
+    const divider = <Text color={C.track}>{'─'.repeat(cols)}</Text>
+
     const tile = (key: string, label: string, value: string) => (
-      <Box key={key} flexDirection="column" flexGrow={1} borderStyle="round" borderColor="subtle" paddingX={1}>
-        <Text dimColor>{label}</Text>
+      <Box key={key} flexDirection="column" flexGrow={1} backgroundColor="#2A2A2A" paddingX={1}>
+        <Text color="#9A9A9A">{label}</Text>
         <Text bold>{value}</Text>
       </Box>
     )
 
-    const ordered = [...subs.filter(a => a.status === 'running').reverse(), ...subs.filter(a => a.status !== 'running').reverse()]
-
-    const card = (a: SubAgent) => {
-      const look = lookFor(a, custom)
+    const row = (a: SubAgent) => {
       const isRunning = a.status === 'running'
-      const [effortLabel, effortColor] = effortLook(a.effort)
+      const look = lookFor(`${a.kind} ${a.label}`, custom)
+      const [effortWord, effortColor] = effortLook(a.effort)
       const done = a.todos.filter(x => x.status === 'completed').length
       const activeTodo = a.todos.find(x => x.status === 'in_progress')
-      const progressText = a.todos.length > 0 ? `${done}/${a.todos.length}${activeTodo && isRunning ? ` · ${activeTodo.content}` : ''}` : isRunning ? `step ${a.steps}` : `${a.steps} steps`
-      const ctxPct = Math.round((a.lastContext / (a.lastContext > 200_000 || /1m/i.test(a.model) ? 1_000_000 : 200_000)) * 100)
+      const progress =
+        a.todos.length > 0
+          ? `${done}/${a.todos.length}${isRunning && activeTodo ? ` · ${activeTodo.content}` : ''}`
+          : isRunning
+            ? `step ${a.steps}`
+            : `${a.steps}/${a.steps}`
+      const ctxPct = Math.max(0, Math.round((a.lastContext / (a.lastContext > 200_000 || /1m/i.test(a.model) ? 1_000_000 : 200_000)) * 100))
       const tokens = a.input + a.output + a.cacheRead + a.cacheWrite
-      const [barOn, barOff] = bar(progressOf(a), barWidth - 2)
-      const mark = isRunning ? <Text color="success">●</Text> : a.status === 'done' ? <Text color="success">✓</Text> : <Text color="error">✗</Text>
+      const metrics = `ctx ${ctxPct}% · ${fmtTokens(tokens)} ≈$${a.usd.toFixed(2)} ${fmtTime((a.endedAt ?? now) - a.startedAt)}`
+      const mark =
+        a.status === 'failed' ? <Text color={C.red}>✗</Text> : isRunning ? <Text color={C.coral}>●</Text> : <Text color={C.green}>✓</Text>
+      const frac = progressOf(a)
+      const [barOn, barOff] = textBar(frac, Math.max(8, cols - 8))
 
       const sprite = Svg ? (
-        <Svg source={crabSvg(look, !isRunning)} alt={`${a.label} crab`} width={30} height={24} />
+        <Svg source={crabSvg(look)} alt={`${a.label} crab`} width={40} height={30} />
       ) : (
-        <Box flexDirection="column">
-          <Text color={look.hatColor}>{HAT_TEXT[look.hat] ?? HAT_TEXT.none}</Text>
-          <Text color={look.color}> ▐▛█▜▌ </Text>
-          <Text color={look.color}>{isRunning && frame ? '  ▝ ▘  ' : '  ▘ ▝  '}</Text>
+        <Box flexDirection="column" width={6}>
+          <Text color={look.hatColor}> ▄▄▄ </Text>
+          <Text color={look.color}>▐▛█▜▌</Text>
+          <Text color={look.color}> ▘ ▝ </Text>
         </Box>
       )
 
       if (collapsed) {
         return (
-          <Box key={`agent-${a.id}`} flexDirection="row" gap={1}>
-            {mark}
-            <Text bold={isRunning} dimColor={!isRunning} wrap="truncate-end">
+          <Box key={`agent-${a.id}`} flexDirection="row" justifyContent="space-between" gap={1}>
+            <Text bold wrap="truncate-end">
               {a.label}
             </Text>
-            <Text dimColor>{progressText.split(' · ')[0]}</Text>
+            <Box flexDirection="row" gap={1}>
+              <Text dimColor>{progress.split(' · ')[0]}</Text>
+              {mark}
+            </Box>
           </Box>
         )
       }
 
       return (
-        <Box
-          key={`agent-${a.id}`}
-          flexDirection="column"
-          borderStyle="round"
-          borderColor={isRunning ? 'claude' : 'subtle'}
-          borderDimColor={!isRunning}
-          paddingX={1}
-        >
-          <Box flexDirection="row" gap={1}>
-            {sprite}
+        <Box key={`agent-${a.id}`} flexDirection="column">
+          <Box flexDirection="row" gap={1} alignItems="center">
+            <Box width={6} flexShrink={0} alignItems="center">
+              {sprite}
+            </Box>
             <Box flexDirection="column" flexGrow={1} flexShrink={1}>
-              <Box flexDirection="row" justifyContent="space-between">
-                <Text bold={isRunning} dimColor={!isRunning} wrap="truncate-end">
+              <Box flexDirection="row" justifyContent="space-between" gap={1}>
+                <Text bold wrap="truncate-end">
                   {a.label}
                 </Text>
                 {mark}
               </Box>
               <Box flexDirection="row" gap={1}>
-                {effortLabel && <Text color={effortColor}>{effortLabel}</Text>}
-                <Text dimColor>
+                {effortWord && <Text color={effortColor}>{effortWord}</Text>}
+                <Text color="#9A9A9A">
                   {prettyModel(a.model)}
                   {a.effort ? ` · ${a.effort}` : ''}
                 </Text>
               </Box>
+              <Box flexDirection="row" justifyContent="space-between" gap={1}>
+                <Text wrap="truncate-end">{progress}</Text>
+                <Text color="#9A9A9A">{metrics}</Text>
+              </Box>
+              {Svg ? (
+                <Svg source={barSvg(frac, effortColor)} alt={`${Math.round(frac * 100)}% done`} height={4} />
+              ) : (
+                <Box flexDirection="row">
+                  <Text color={effortColor}>{barOn}</Text>
+                  <Text color={C.track}>{barOff}</Text>
+                </Box>
+              )}
             </Box>
-          </Box>
-          <Box flexDirection="row" justifyContent="space-between" gap={1}>
-            <Text dimColor={!isRunning} wrap="truncate-end">
-              {progressText}
-            </Text>
-            <Text dimColor>
-              ctx {ctxPct}% · {fmtTokens(tokens)} ≈${a.usd.toFixed(2)} {fmtTime((a.endedAt ?? now) - a.startedAt)}
-            </Text>
-          </Box>
-          <Box flexDirection="row">
-            <Text color={isRunning ? 'success' : look.color} dimColor={!isRunning}>
-              {barOn}
-            </Text>
-            <Text color="subtle">{barOff}</Text>
           </Box>
         </Box>
       )
     }
+
+    const list = (items: SubAgent[]) =>
+      items.map((a, i) => (
+        <Box key={`wrap-${a.id}`} flexDirection="column">
+          {row(a)}
+          {i < items.length - 1 && !collapsed && divider}
+        </Box>
+      ))
 
     return (
       <Box flexDirection="column" gap={1}>
@@ -463,23 +557,45 @@ export const register: Register = on => {
         </Box>
         <Box flexDirection="row" justifyContent="space-between">
           <Button key="collapse" label={collapsed ? 'Expand' : 'Collapse'} plain onPress={() => update($, isCollapsed, v => !v)} />
-          {subs.some(a => a.status !== 'running') && (
-            <Button key="clear" label="Clear finished" plain onPress={() => update($, agents, list => list.filter(a => a.status === 'running'))} />
+          {finished.length > 0 && (
+            <Button key="clear" label="Clear finished" plain onPress={() => update($, agents, l => l.filter(a => a.status === 'running'))} />
           )}
         </Box>
-        {ordered.length === 0 && planned.length === 0 && (
-          <Text dimColor>No agents yet. They appear here as Claude spawns helpers. Restyle them with /crab-style.</Text>
+
+        {subs.length === 0 && planned.length === 0 && (
+          <Text color="#9A9A9A">No agents yet. Helpers Claude starts show up here. Restyle their crabs with /crab-style.</Text>
         )}
-        {ordered.map(card)}
+
+        {running.length > 0 && (
+          <Box flexDirection="column">
+            <Text color="#9A9A9A">Running · {running.length}</Text>
+            {list(running)}
+          </Box>
+        )}
+
+        {finished.length > 0 && (
+          <Box flexDirection="column">
+            {running.length > 0 && divider}
+            <Button
+              key="toggle-finished"
+              label={`${finishedOpen ? '▾' : '▸'} Finished · ${finished.length}`}
+              plain
+              onPress={() => update($, isFinishedOpen, v => !v)}
+            />
+            {finishedOpen && list(finished)}
+          </Box>
+        )}
+
         {planned.length > 0 && (
           <Box flexDirection="column">
-            <Text dimColor>Planned · {planned.length}</Text>
-            {planned.map((p, i) => (
+            {divider}
+            <Text color="#9A9A9A">Planned · {planned.length}</Text>
+            {planned.map(p => (
               <Box key={`plan-${p.id}`} flexDirection="row" justifyContent="space-between">
-                <Text dimColor wrap="truncate-end">
-                  {plan.indexOf(p) + 1 || i + 1}. {p.content}
+                <Text color="#9A9A9A" wrap="truncate-end">
+                  {plan.indexOf(p) + 1}. {p.content}
                 </Text>
-                <Text dimColor>◷</Text>
+                <Text color="#9A9A9A">◷</Text>
               </Box>
             ))}
           </Box>
