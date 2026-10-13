@@ -1,6 +1,6 @@
 {
   "name": "cache-tax",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": { "name": "Isaac" },
   "description": "Warns before a prompt that would reload a cold prompt cache, with a token and cost estimate; /keepwarm keeps it warm.",
   "types": "./types/index.d.ts"
