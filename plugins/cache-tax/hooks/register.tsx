@@ -151,6 +151,12 @@ export const register: Register = on => {
     const text = e.text
     // Put the prompt back in the composer so Enter sends it.
     $.clock.after(30, () => void $.prompt.fill({ text, mode: 'replace' }))
+    // The drop reason sits behind "View details" in the desktop app; say it where it is seen.
+    $.ui.toast(
+      `Cache Tax held your prompt: the cache went cold ${minutes}m ago, so sending re-reads ~${fmtTok(tokens)} tokens (≈$${cold.toFixed(2)}). Press Enter again to send it.`,
+      { timeoutMs: 12000 },
+    )
+    $.ui.status('cache cold · held one prompt · press Enter again to send')
     return {
       drop:
         `Cache Tax: the prompt cache went cold ${minutes}m ago. Sending re-reads ~${fmtTok(tokens)} tokens ` +
